@@ -807,15 +807,17 @@ func (m *MediaSessionWebrtc) ReadRTCP(buf []byte, pkts []rtcp.Packet) (int, erro
 	if !m.ready || m.mux == nil || m.remoteCtxSRTCP == nil {
 		return 0, fmt.Errorf("WebRTC media is not finalized")
 	}
-	n, _, err := m.mux.rtcp.ReadFrom(buf)
-	if err != nil {
-		return 0, err
+	for {
+		n, _, err := m.mux.rtcp.ReadFrom(buf)
+		if err != nil {
+			return 0, err
+		}
+		data, err := m.remoteCtxSRTCP.DecryptRTCP(buf, buf[:n], nil)
+		if err == nil {
+			return RTCPUnmarshal(data, pkts)
+		}
+		logSRTPDiscard(&m.srtpDiscarded, err)
 	}
-	data, err := m.remoteCtxSRTCP.DecryptRTCP(buf, buf[:n], nil)
-	if err != nil {
-		return 0, errors.Join(errRTCPFailedToUnmarshal, fmt.Errorf("decrypt WebRTC SRTCP: %w", err))
-	}
-	return RTCPUnmarshal(data, pkts)
 }
 
 func (m *MediaSessionWebrtc) WriteRTCP(pkt rtcp.Packet) error {
