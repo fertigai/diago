@@ -659,7 +659,7 @@ func (m *MediaSessionWebrtc) Finalize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create local SRTP context: %w", err)
 	}
-	remoteContext, err := srtp.CreateContext(serverKey, serverSalt, p)
+	remoteContext, err := srtp.CreateContext(serverKey, serverSalt, p, srtpReplayProtection...)
 	if err != nil {
 		return fmt.Errorf("create remote SRTP context: %w", err)
 	}
@@ -667,7 +667,7 @@ func (m *MediaSessionWebrtc) Finalize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create local SRTCP context: %w", err)
 	}
-	remoteRTCPContext, err := srtp.CreateContext(serverKey, serverSalt, p)
+	remoteRTCPContext, err := srtp.CreateContext(serverKey, serverSalt, p, srtpReplayProtection...)
 	if err != nil {
 		return fmt.Errorf("create remote SRTCP context: %w", err)
 	}

@@ -17,6 +17,9 @@ const (
 	SRTPProfileNullHmacSha1_80     uint16 = uint16(srtp.ProtectionProfileNullHmacSha1_80)
 )
 
+// srtpReplayProtection enables the RFC 3711 replay window (64 packets, its minimum) on receive contexts.
+var srtpReplayProtection = []srtp.ContextOption{srtp.SRTPReplayProtection(64), srtp.SRTCPReplayProtection(64)}
+
 func srtpProfileString(p srtp.ProtectionProfile) string {
 	switch p {
 	case srtp.ProtectionProfileAes128CmHmacSha1_80:
