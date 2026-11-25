@@ -76,5 +76,8 @@ func (w *RTPDtmfWriter) writeDTMF(dtmf rune) error {
 			return err
 		}
 	}
+	// The event held the audio clock still; advance it by the event's duration so the next event gets its own
+	// timestamp (RFC 4733 2.5.1.2) instead of reading as a retransmission of this one.
+	packetWriter.DelayTimestamp(uint32(len(evs)) * w.codec.SampleTimestamp())
 	return nil
 }
