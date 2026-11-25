@@ -44,6 +44,8 @@ type RTPPacketReader struct {
 	reader RTPReader
 	// swapped is set by UpdateReader, whose read deadline then stays until a read clears it
 	swapped atomic.Bool
+	// reading is set while a read is in flight, the only time UpdateReader needs a deadline to interrupt it
+	reading atomic.Bool
 
 	// PacketHeader is stored after calling Read
 	// Safe to read only in same goroutine as Read
@@ -202,24 +204,28 @@ func (r *RTPPacketReader) Reader() RTPReader {
 	return r.reader
 }
 
-// readRTP reads from the current reader. A read that fails after a swap, during it or after it,
-// however many swaps came in between, clears the swap's deadline and reads the current reader again.
+// readRTP reads from the current reader. A read a swap interrupted, or raced, clears the swap's deadline;
+// a failed one then reads the current reader again.
 func (r *RTPPacketReader) readRTP(buf []byte, pkt *rtp.Packet) (int, error) {
-	resume := false
 	for {
-		// Under the lock, so a newer swap's deadline is never the one cleared
 		r.mu.RLock()
 		reader := r.reader
-		if resume {
-			resumeRead(reader)
-		}
+		r.reading.Store(true)
 		r.mu.RUnlock()
 
 		n, err := reader.ReadRTP(buf, pkt)
-		if err == nil || !r.swapped.Swap(false) {
+		// Under the lock, so a swap sees either this read in flight or none, and a newer swap's deadline is never
+		// the one cleared
+		r.mu.RLock()
+		r.reading.Store(false)
+		swapped := r.swapped.Swap(false)
+		if swapped {
+			resumeRead(r.reader)
+		}
+		r.mu.RUnlock()
+		if !swapped || err == nil {
 			return n, err
 		}
-		resume = true
 	}
 }
 
@@ -247,17 +253,20 @@ func (r *RTPPacketReader) UpdateRTPSession(rtpSess *RTPSession) {
 func (r *RTPPacketReader) UpdateReader(reader RTPReader) {
 	// codec := CodecFromSession(rtpSess.Sess)
 	r.mu.Lock()
-	// Before the deadline, so the read it interrupts sees the swap
-	r.swapped.Store(true)
-	// Make sure that current reading is stopped
-	if m, ok := r.reader.(*MediaSession); ok {
-		m.rtpConn.SetReadDeadline(time.Now())
-	}
-	if s, ok := r.reader.(*RTPSession); ok {
-		s.Sess.rtpConn.SetReadDeadline(time.Now())
-	}
-	if s, ok := r.reader.(*RTPSessionWebrtc); ok {
-		_ = s.Sess.StopRTP(1, -time.Nanosecond)
+	// Interrupt only a read in flight: with none, nobody would clear the deadline, and every direct read of a
+	// session that shares the connection (a forked one) would time out.
+	if r.reading.Load() {
+		// Before the deadline, so the read it interrupts sees the swap
+		r.swapped.Store(true)
+		if m, ok := r.reader.(*MediaSession); ok {
+			m.rtpConn.SetReadDeadline(time.Now())
+		}
+		if s, ok := r.reader.(*RTPSession); ok {
+			s.Sess.rtpConn.SetReadDeadline(time.Now())
+		}
+		if s, ok := r.reader.(*RTPSessionWebrtc); ok {
+			_ = s.Sess.StopRTP(1, -time.Nanosecond)
+		}
 	}
 	r.reader = reader
 	// TODO we need to make sure that current Audio Reading is really stopped before updating

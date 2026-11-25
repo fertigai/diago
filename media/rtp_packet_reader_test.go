@@ -124,6 +124,18 @@ func TestRTPPacketReaderSessionSwap(t *testing.T) {
 		send()
 		wait(done)
 	})
+
+	t.Run("DirectReadAfterIdleSwap", func(t *testing.T) {
+		sess := NewRTPSession(receiver.Fork())
+		reader.UpdateRTPSession(sess)
+		done := make(chan error, 1)
+		go func() {
+			_, err := sess.ReadRTP(make([]byte, RTPBufSize), &rtp.Packet{})
+			done <- err
+		}()
+		send()
+		wait(done)
+	})
 }
 
 func BenchmarkRTPPacketReader(b *testing.B) {
