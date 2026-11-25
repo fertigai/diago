@@ -25,5 +25,5 @@ func TestRTPDTMFWriterBackToBack(t *testing.T) {
 	require.Len(t, pkts, 14)
 	first, second := pkts[0].Timestamp, pkts[7].Timestamp
 	require.Equal(t, first, pkts[6].Timestamp, "one event keeps its start timestamp")
-	require.GreaterOrEqual(t, second-first, uint32(7*160), "the next event starts after this one")
+	require.Equal(t, first+7*160, second, "the next event starts where this one ends")
 }
