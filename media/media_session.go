@@ -167,6 +167,7 @@ type MediaSession struct {
 	// SRTP
 	localCtxSRTP  *srtp.Context
 	remoteCtxSRTP *srtpReceiver
+	srtpDiscarded atomic.Uint64
 	srtpRemoteTag int
 	localSDES     sdesInline
 
@@ -911,8 +912,7 @@ func (m *MediaSession) ReadRTP(buf []byte, pkt *rtp.Packet) (int, error) {
 		if err == nil {
 			break
 		}
-		// RFC 3711 3.3: a packet that fails authentication or the replay check is discarded, it does not end the stream.
-		DefaultLogger().Debug("Discarding SRTP packet", "error", err)
+		logSRTPDiscard(&m.srtpDiscarded, err)
 	}
 
 	if m.remoteCtxSRTP != nil {

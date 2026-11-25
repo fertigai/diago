@@ -5,6 +5,7 @@ package media
 
 import (
 	"strings"
+	"sync/atomic"
 
 	"github.com/pion/srtp/v3"
 )
@@ -19,6 +20,14 @@ const (
 
 // srtpReplayProtection enables the RFC 3711 replay window (64 packets, its minimum) on receive contexts.
 var srtpReplayProtection = []srtp.ContextOption{srtp.SRTPReplayProtection(64), srtp.SRTCPReplayProtection(64)}
+
+// logSRTPDiscard records a received packet that failed authentication or the replay check. RFC 3711 3.3 discards such a
+// packet rather than ending the stream; a steady count still means a wrong key, so it warns on the first and every 1000th.
+func logSRTPDiscard(discarded *atomic.Uint64, err error) {
+	if n := discarded.Add(1); n%1000 == 1 {
+		DefaultLogger().Warn("Discarding SRTP packets that fail authentication or the replay check", "discarded", n, "error", err)
+	}
+}
 
 func srtpProfileString(p srtp.ProtectionProfile) string {
 	switch p {

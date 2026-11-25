@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emiago/diago/media/sdp"
@@ -97,6 +98,7 @@ type MediaSessionWebrtc struct {
 	dtlsConn                   *dtls.Conn
 	localCtxSRTP               *srtp.Context
 	remoteCtxSRTP              *srtp.Context
+	srtpDiscarded              atomic.Uint64
 	localCtxSRTCP              *srtp.Context
 	remoteCtxSRTCP             *srtp.Context
 	rtcpReducedSize            bool
@@ -742,16 +744,20 @@ func (m *MediaSessionWebrtc) ReadRTP(buf []byte, pkt *rtp.Packet) (int, error) {
 	if !m.ready || m.mux == nil || m.remoteCtxSRTP == nil {
 		return 0, fmt.Errorf("WebRTC media is not finalized")
 	}
-	n, _, err := m.mux.rtp.ReadFrom(buf)
-	if err != nil {
-		return 0, err
+	var decrypted []byte
+	for {
+		n, _, err := m.mux.rtp.ReadFrom(buf)
+		if err != nil {
+			return 0, err
+		}
+		decrypted, err = m.remoteCtxSRTP.DecryptRTP(buf, buf[:n], &pkt.Header)
+		if err == nil {
+			break
+		}
+		logSRTPDiscard(&m.srtpDiscarded, err)
 	}
-	decrypted, err := m.remoteCtxSRTP.DecryptRTP(buf, buf[:n], &pkt.Header)
-	if err != nil {
-		return n, fmt.Errorf("decrypt WebRTC SRTP: %w", err)
-	}
-	n = len(decrypted)
-	if err = rtpUnmarshalPayload(decrypted, pkt); err != nil {
+	n := len(decrypted)
+	if err := rtpUnmarshalPayload(decrypted, pkt); err != nil {
 		return n, fmt.Errorf("unmarshal WebRTC RTP: %w", err)
 	}
 	if m.Mode == sdp.ModeSendonly || m.Mode == "inactive" {
@@ -807,7 +813,7 @@ func (m *MediaSessionWebrtc) ReadRTCP(buf []byte, pkts []rtcp.Packet) (int, erro
 	}
 	data, err := m.remoteCtxSRTCP.DecryptRTCP(buf, buf[:n], nil)
 	if err != nil {
-		return 0, fmt.Errorf("decrypt WebRTC SRTCP: %w", err)
+		return 0, errors.Join(errRTCPFailedToUnmarshal, fmt.Errorf("decrypt WebRTC SRTCP: %w", err))
 	}
 	return RTCPUnmarshal(data, pkts)
 }
