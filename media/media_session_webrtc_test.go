@@ -14,6 +14,7 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +115,19 @@ func TestMediaSessionWebrtcICEAndSRTP(t *testing.T) {
 	require.Equal(t, payload, readBuf[:n])
 	require.Equal(t, uint64(1), offerRTPSession.WriteStats().PacketsCount)
 	require.Equal(t, uint64(1), answerRTPSession.ReadStats().PacketsCount)
+
+	// A replayed packet is discarded and the stream goes on.
+	replay := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SequenceNumber: 500, SSRC: 7}, Payload: payload}
+	require.NoError(t, offerer.WriteRTP(replay))
+	require.NoError(t, offerer.WriteRTP(replay))
+	replay.SequenceNumber = 501
+	require.NoError(t, offerer.WriteRTP(replay))
+	for _, want := range []uint16{500, 501} {
+		var got rtp.Packet
+		_, err := answerer.ReadRTP(make([]byte, RTPBufSize), &got)
+		require.NoError(t, err)
+		require.Equal(t, want, got.SequenceNumber)
+	}
 
 	select {
 	case <-ctx.Done():

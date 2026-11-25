@@ -167,6 +167,7 @@ type MediaSession struct {
 	// SRTP
 	localCtxSRTP  *srtp.Context
 	remoteCtxSRTP *srtpReceiver
+	srtpDiscarded atomic.Uint64
 	srtpRemoteTag int
 	localSDES     sdesInline
 
@@ -610,7 +611,7 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte, offered bool) error {
 			masterKey := keyBytes[:16]
 			masterSalt := keyBytes[16:]
 
-			ctx, err := srtp.CreateContext(masterKey, masterSalt, profile)
+			ctx, err := srtp.CreateContext(masterKey, masterSalt, profile, srtpReplayProtection...)
 			if err != nil {
 				return fmt.Errorf("CreateContext failed: %v", err)
 			}
@@ -735,7 +736,7 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte, offered bool) error {
 			}
 
 			// s.localCtxSRTP, err = srtp.CreateContext(serverKey, serverSalt, p)
-			remoteContext, err := srtp.CreateContext(serverKey, serverSalt, p)
+			remoteContext, err := srtp.CreateContext(serverKey, serverSalt, p, srtpReplayProtection...)
 			if err != nil {
 				return fmt.Errorf("failed to create SRTP context: %w", err)
 			}
@@ -895,16 +896,26 @@ func (m *MediaSession) ReadRTP(buf []byte, pkt *rtp.Packet) (int, error) {
 		return 0, io.ErrShortBuffer
 	}
 
-	n, from, err := m.rtpConn.ReadFrom(buf)
-	if err != nil {
-		return 0, err
+	var n int
+	var from net.Addr
+	var decrypted []byte
+	for {
+		var err error
+		n, from, err = m.rtpConn.ReadFrom(buf)
+		if err != nil {
+			return 0, err
+		}
+		if m.remoteCtxSRTP == nil {
+			break
+		}
+		decrypted, err = m.remoteCtxSRTP.DecryptRTP(buf, buf[:n], &pkt.Header)
+		if err == nil {
+			break
+		}
+		logSRTPDiscard(&m.srtpDiscarded, err)
 	}
 
 	if m.remoteCtxSRTP != nil {
-		decrypted, err := m.remoteCtxSRTP.DecryptRTP(buf, buf[:n], &pkt.Header)
-		if err != nil {
-			return n, fmt.Errorf("Read SRTP Decrypt error: %w", err)
-		}
 		if len(decrypted) > len(buf) {
 			DefaultLogger().Warn("Growing Decrypted RTP buffer", "diff", len(decrypted)-len(buf))
 		}
@@ -951,7 +962,7 @@ func (m *MediaSession) ReadRTP(buf []byte, pkt *rtp.Packet) (int, error) {
 		return 0, nil
 	}
 
-	return n, err
+	return n, nil
 }
 
 // return parsed rtp

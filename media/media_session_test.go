@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -567,6 +568,45 @@ func TestMediaSRTP(t *testing.T) {
 
 		assert.Equal(t, pkt.Payload, rPkt.Payload)
 	}
+}
+
+func TestMediaSRTPReplay(t *testing.T) {
+	// Any free ports: TestMediaPortRange leaves the package range narrow
+	portStart, portEnd := RTPPortStart, RTPPortEnd
+	RTPPortStart, RTPPortEnd = 0, 0
+	t.Cleanup(func() { RTPPortStart, RTPPortEnd = portStart, portEnd })
+
+	newSession := func() *MediaSession {
+		m := &MediaSession{
+			Laddr:     net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+			Codecs:    []Codec{CodecAudioAlaw},
+			SecureRTP: 1,
+			SRTPAlg:   SRTPProfileAes128CmHmacSha1_80,
+			Mode:      sdp.ModeSendrecv,
+		}
+		require.NoError(t, m.Init())
+		t.Cleanup(func() { m.Close() })
+		return m
+	}
+	m1, m2 := newSession(), newSession()
+	require.NoError(t, m1.RemoteSDP(m2.LocalSDP(false), false))
+	require.NoError(t, m2.RemoteSDP(m1.LocalSDP(true), true))
+
+	read := func() error {
+		require.NoError(t, m2.rtpConn.SetReadDeadline(time.Now().Add(200*time.Millisecond)))
+		_, err := m2.ReadRTP(make([]byte, RTPBufSize), &rtp.Packet{})
+		return err
+	}
+	send := func(seq uint16) {
+		pkt := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 8, SequenceNumber: seq, SSRC: 42}, Payload: []byte("audio")}
+		require.NoError(t, m1.WriteRTP(pkt))
+	}
+	send(1)
+	require.NoError(t, read())
+	send(1) // a replay: same key, same sequence number
+	require.ErrorIs(t, read(), os.ErrDeadlineExceeded)
+	send(2)
+	require.NoError(t, read())
 }
 
 func TestMediaSessionRTPSymetric(t *testing.T) {
