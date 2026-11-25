@@ -214,16 +214,17 @@ func (r *RTPPacketReader) readRTP(buf []byte, pkt *rtp.Packet) (int, error) {
 		r.mu.RUnlock()
 
 		n, err := reader.ReadRTP(buf, pkt)
-		r.reading.Store(false)
-		if !r.swapped.Swap(false) {
-			return n, err
-		}
-		// Under the lock, so a newer swap's deadline is never the one cleared
+		// Under the lock, so a swap sees either this read in flight or none, and a newer swap's deadline is never
+		// the one cleared
 		r.mu.RLock()
-		resumeRead(r.reader)
+		r.reading.Store(false)
+		swapped := r.swapped.Swap(false)
+		if swapped {
+			resumeRead(r.reader)
+		}
 		r.mu.RUnlock()
-		if err == nil {
-			return n, nil
+		if !swapped || err == nil {
+			return n, err
 		}
 	}
 }
